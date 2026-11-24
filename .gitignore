@@ -1,0 +1,17 @@
+# byte-compiled
+__pycache__/
+*.py[cod]
+
+# Ordo local state
+*.db
+*.db-wal
+*.db-shm
+ordo-outbox.jsonl
+.ordo/
+
+# packaging
+*.egg-info/
+build/
+dist/
+.venv/
+venv/

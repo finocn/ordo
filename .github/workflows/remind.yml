@@ -1,0 +1,64 @@
+# Ordo as a server, the free & card-free way.
+#
+# Every 30 minutes this workflow runs `ordo remind` on a GitHub-hosted runner
+# (which has a real Python and full internet access), sends the due reminders to
+# Telegram, and commits the updated `ordo.db` back to the `state` branch.
+#
+# Code lives on `main`; data lives on `state`. Nothing is stored in `main`.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   ORDO_TELEGRAM_TOKEN  - bot token from @BotFather
+#   ORDO_TELEGRAM_CHAT   - your numeric chat id
+#
+# No card, no billing. Public repo => unlimited Actions minutes.
+name: ordo remind
+
+on:
+  schedule:
+    # GitHub cron is UTC and best-effort (may be delayed by a few minutes).
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+# Never let two runs write the state branch at the same time.
+concurrency:
+  group: ordo-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore state (ordo.db) from the state branch
+        run: |
+          git fetch origin state || true
+          git checkout origin/state -- ordo.db 2>/dev/null || true
+
+      - name: Run ordo remind
+        env:
+          ORDO_DB: ordo.db
+          ORDO_NOTIFY: telegram
+          ORDO_TELEGRAM_TOKEN: ${{ secrets.ORDO_TELEGRAM_TOKEN }}
+          ORDO_TELEGRAM_CHAT: ${{ secrets.ORDO_TELEGRAM_CHAT }}
+        run: python3 -m ordo remind
+
+      - name: Save state back to the state branch
+        run: |
+          set -e
+          git config user.name  "ordo-bot"
+          git config user.email "ordo-bot@users.noreply.github.com"
+          # Orphan branch that holds only the database + heartbeat.
+          git checkout --orphan state
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f ordo.db
+          # A heartbeat guarantees repo activity, so scheduled workflows are
+          # never auto-disabled after 60 days of inactivity.
+          date -u +%FT%TZ > HEARTBEAT
+          git add -f HEARTBEAT
+          git commit -m "state: $(date -u +%FT%TZ)"
+          git push -f origin state

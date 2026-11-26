@@ -1,0 +1,59 @@
+# Build a read-only Ordo dashboard and publish it to GitHub Pages.
+#
+# Reads the current `ordo.db` from the `state` branch (written by remind.yml),
+# renders a static `index.html`, and deploys it. No server, no cost, no card.
+#
+# One-time setup: Settings -> Pages -> Build and deployment -> Source:
+# "GitHub Actions".
+name: dashboard
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # once a day, after the nightly reminders
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "ordo/**"
+      - "tools/build_dashboard.py"
+      - ".github/workflows/dashboard.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore state (ordo.db) from the state branch
+        run: |
+          git fetch origin state || true
+          git checkout origin/state -- ordo.db 2>/dev/null || true
+
+      - name: Build static dashboard
+        run: python3 tools/build_dashboard.py --out _site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

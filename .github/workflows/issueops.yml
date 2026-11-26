@@ -1,0 +1,75 @@
+# Manage Ordo from GitHub Issues - a mobile UI with no server.
+#
+# Open an issue whose TITLE is an Ordo command, e.g.:
+#     add "Починить парсер" -d 3d -P 1
+#     /done 4 -c "готово"
+#     list --overdue
+# The workflow runs it, replies with the output, and saves the database back to
+# the `state` branch. The issue itself becomes the audit trail.
+#
+# Safety: only issues opened by the repository owner are executed.
+name: issueops
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+# Share the state lock with remind.yml so the database is never written twice
+# at the same time.
+concurrency:
+  group: ordo-state
+  cancel-in-progress: false
+
+jobs:
+  command:
+    if: github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore state (ordo.db) from the state branch
+        run: |
+          git fetch origin state || true
+          git checkout origin/state -- ordo.db 2>/dev/null || true
+
+      - name: Run command from the issue title
+        env:
+          ORDO_DB: ordo.db
+          ORDO_NOTIFY: none
+          ORDO_ISSUE_COMMAND: ${{ github.event.issue.title }}
+        run: python3 tools/run_issue_command.py | tee /tmp/ordo-out.txt
+
+      - name: Reply with the result
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let out = 'Команда обработана.';
+            try { out = fs.readFileSync('/tmp/ordo-out.txt', 'utf8'); } catch (e) {}
+            if (!out.trim()) out = 'Команда обработана (нет вывода).';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '```\n' + out.slice(0, 60000) + '\n```'
+            });
+
+      - name: Save state back to the state branch
+        if: always()
+        run: |
+          set -e
+          git config user.name  "ordo-bot"
+          git config user.email "ordo-bot@users.noreply.github.com"
+          git checkout --orphan state
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f ordo.db
+          date -u +%FT%TZ > HEARTBEAT
+          git add -f HEARTBEAT
+          git commit -m "state: issue #${{ github.event.issue.number }} $(date -u +%FT%TZ)" || exit 0
+          git push -f origin state

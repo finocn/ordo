@@ -13,7 +13,7 @@ from . import timeparse as tp
 from .config import config_path, load as load_config, resolve_db_path, write_example
 from .db import connect
 from .models import ALL_STATUSES, PRIORITY_NAMES
-from .notify import build_notifier
+from .notify import NotifyError, build_notifier
 from .service import OrdoError, Store
 
 _PRIORITY_BY_NAME = {name: value for value, name in PRIORITY_NAMES.items()}
@@ -128,6 +128,21 @@ def build_parser():
     remind.add_argument("--channel", action="append", metavar="NAME",
                         help="override notify channels (repeatable)")
     remind.add_argument("--now", metavar="WHEN", help="pretend it is this time")
+
+    bot = sub.add_parser("bot", help="answer Telegram commands (getUpdates)", parents=[common])
+    bot.add_argument("--once", action="store_true",
+                     help="process pending updates and exit (default)")
+    bot.add_argument("--follow", action="store_true",
+                     help="long-poll until stopped (for local use)")
+    bot.add_argument("--test", action="store_true",
+                     help="send a test message to the configured chat")
+    bot.add_argument("--limit", type=int, default=100, help="max updates per run (default 100)")
+    bot.add_argument("--timeout", type=float, default=2.0,
+                     help="long-poll timeout in seconds for --follow (default 2)")
+    bot.add_argument("--allow-chat", metavar="ID",
+                     help="only accept this chat id (default: notify.telegram.chat_id)")
+    bot.add_argument("--dry-run", action="store_true",
+                     help="print the replies instead of sending them")
 
     history = sub.add_parser("history", aliases=["log-task"], help="show a task's history", parents=[common])
     history.add_argument("task_id")
@@ -371,7 +386,68 @@ def dispatch(args, store, config, out, styler):
                         _emit(out, False, None, item["body"])
         return 0
 
+    if command == "bot":
+        return _dispatch_bot(args, store, config, out, as_json)
+
     raise OrdoError("unknown command: %s" % command)
+
+
+def _dispatch_bot(args, store, config, out, as_json):
+    from . import bot as bot_mod
+
+    telegram = (config.get("notify") or {}).get("telegram") or {}
+    chat_id = telegram.get("chat_id") or ""
+
+    if getattr(args, "test", False):
+        if not chat_id:
+            raise OrdoError(
+                "bot --test needs a chat id (set notify.telegram.chat_id or ORDO_TELEGRAM_CHAT)"
+            )
+        if args.dry_run:
+            _emit(out, as_json, {"dry_run": True, "chat_id": chat_id, "text": bot_mod.TEST_MESSAGE},
+                  "dry-run: would send a test message to %s" % chat_id)
+            return 0
+        client = bot_mod.build_client(config)
+        client.send_message(chat_id, bot_mod.TEST_MESSAGE)
+        me = {}
+        try:
+            me = client.get_me() or {}
+        except Exception:  # noqa: BLE001 - getMe is a nice-to-have
+            pass
+        _emit(out, as_json, {"sent": True, "chat_id": chat_id, "bot": me.get("username")},
+              "test message sent to %s as @%s" % (chat_id, me.get("username") or "?"))
+        return 0
+
+    global_args = []
+    if getattr(args, "db", None):
+        global_args += ["--db", args.db]
+    if getattr(args, "config", None):
+        global_args += ["--config", args.config]
+
+    client = bot_mod.build_client(config)
+    allowed = getattr(args, "allow_chat", None) or chat_id or None
+    logger = (lambda text: None) if as_json else (lambda text: _emit(out, False, None, text))
+    bot = bot_mod.Bot(store, client, allowed_chat=allowed, dry_run=args.dry_run,
+                      global_args=global_args, logger=logger)
+
+    if args.follow:
+        _emit(out, as_json, {"following": True},
+              "ordo bot: жду команды в Telegram (Ctrl+C - остановить)")
+        bot.follow(interval=args.timeout, limit=args.limit)
+        return 0
+
+    results = bot.run_once(limit=args.limit)
+    if as_json:
+        _emit(out, True, results, "")
+    elif not results:
+        _emit(out, False, None, "no new updates")
+    else:
+        for item in results:
+            _emit(out, False, None, "%-8s update=%s chat=%s"
+                  % (item.get("status"), item.get("update_id"), item.get("chat_id")))
+            if args.dry_run and item.get("reply"):
+                _emit(out, False, None, item["reply"])
+    return 0
 
 
 def _dispatch_project(args, store, out, as_json, styler):
@@ -416,7 +492,7 @@ def main(argv=None):
     styler = report.make_styler(out, enabled=enabled)
     try:
         return dispatch(args, store, config, out, styler)
-    except (OrdoError, tp.TimeParseError) as exc:
+    except (OrdoError, tp.TimeParseError, NotifyError) as exc:
         print("ordo: %s" % exc, file=err)
         return 1
     finally:

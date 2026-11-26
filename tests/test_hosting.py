@@ -80,6 +80,29 @@ class IssueCommandTest(_TempState):
         self.assertEqual(check.list_tasks()[0].title, "через issue")
         check.conn.close()
 
+    def test_non_command_title_is_reported_not_crashed(self):
+        """Regression: a plain issue title must not blow up the workflow.
+
+        Previously argparse raised SystemExit before the database was created,
+        so the "Save state" step failed with `pathspec 'ordo.db' did not match`.
+        """
+        buffer = io.StringIO()
+        env = {"ORDO_ISSUE_COMMAND": "dashboard: Deploy to GitHub Pages падает с 404",
+               "ORDO_DB": self.db, "ORDO_NOTIFY": "none"}
+        with mock.patch.dict(os.environ, env):
+            with contextlib.redirect_stdout(buffer):
+                code = run_issue_command.main()
+        self.assertNotEqual(code, 0)
+        self.assertIn("Ordo", buffer.getvalue())
+
+    def test_empty_command_is_reported(self):
+        buffer = io.StringIO()
+        with mock.patch.dict(os.environ, {"ORDO_ISSUE_COMMAND": "  "}):
+            with contextlib.redirect_stdout(buffer):
+                code = run_issue_command.main()
+        self.assertNotEqual(code, 0)
+        self.assertIn("заголовке issue", buffer.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

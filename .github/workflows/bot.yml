@@ -1,0 +1,68 @@
+# Ordo Telegram bot driven by GitHub Actions cron (no server, no card).
+#
+# Telegram cannot push updates to a GitHub runner, so the bot polls
+# `getUpdates` once per run. Latency is up to one cron interval (5 minutes
+# here). The last processed update id lives in `ordo.db` (table `meta`), so a
+# run never handles the same message twice.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   ORDO_TELEGRAM_TOKEN  - bot token from @BotFather
+#   ORDO_TELEGRAM_CHAT   - your numeric chat id (also the access allowlist)
+#
+# Verify the setup locally first:
+#   ordo bot --test        # sends a test message to ORDO_TELEGRAM_CHAT
+#   ordo bot --follow      # long-polls and answers commands interactively
+name: ordo bot
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+# Never let two runs write the state branch at the same time.
+concurrency:
+  group: ordo-state
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore state (ordo.db) from the state branch
+        run: |
+          git fetch origin state || true
+          git checkout origin/state -- ordo.db 2>/dev/null || true
+
+      - name: Ensure the database exists
+        env:
+          ORDO_DB: ordo.db
+        run: python3 -m ordo init >/dev/null
+
+      - name: Answer pending Telegram updates
+        env:
+          ORDO_DB: ordo.db
+          ORDO_TELEGRAM_TOKEN: ${{ secrets.ORDO_TELEGRAM_TOKEN }}
+          ORDO_TELEGRAM_CHAT: ${{ secrets.ORDO_TELEGRAM_CHAT }}
+        run: python3 -m ordo bot --once
+
+      - name: Save state back to the state branch
+        run: |
+          set -e
+          git config user.name  "ordo-bot"
+          git config user.email "ordo-bot@users.noreply.github.com"
+          # Orphan branch that holds only the database + heartbeat.
+          git checkout --orphan state
+          git rm -rf --cached . >/dev/null 2>&1 || true
+          git add -f ordo.db
+          # A heartbeat guarantees repo activity, so scheduled workflows are
+          # never auto-disabled after 60 days of inactivity.
+          date -u +%FT%TZ > HEARTBEAT
+          git add -f HEARTBEAT
+          git commit -m "state: bot $(date -u +%FT%TZ)"
+          git push -f origin state

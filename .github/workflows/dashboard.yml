@@ -17,6 +17,12 @@ on:
       - "ordo/**"
       - "tools/build_dashboard.py"
       - ".github/workflows/dashboard.yml"
+  # Refresh the published dashboard as soon as the state branch changes, so a
+  # task added from an issue (or a Telegram command) shows up right away instead
+  # of waiting for the next nightly run.
+  workflow_run:
+    workflows: ["ordo remind", "issueops", "ordo bot"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -29,6 +35,8 @@ concurrency:
 
 jobs:
   build:
+    # workflow_run also fires for failed runs; don't rebuild the dashboard then.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

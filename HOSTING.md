@@ -94,6 +94,36 @@ GitHub Actions — это бесплатные Linux-раннеры с **нас�
 - `.github/workflows/remind.yml` — запуск напоминаний (пример ниже).
 - `.github/workflows/dashboard.yml` — сборка `index.html` и деплой на Pages.
 - `.github/workflows/issueops.yml` — команды из issue (опционально).
+- `.github/workflows/bot.yml` — приём команд Telegram-бота (опционально).
+
+### Telegram-бот из Actions
+
+Telegram не умеет «толкать» апдейты на раннер GitHub, поэтому бот **опрашивает**
+`getUpdates` (`.github/workflows/bot.yml`, раз в 5 минут — минимум для cron
+GitHub). Задержка ответа — до одного интервала, зато без сервера и карты.
+
+```yaml
+- name: Answer pending Telegram updates
+  env:
+    ORDO_DB: ordo.db
+    ORDO_TELEGRAM_TOKEN: ${{ secrets.ORDO_TELEGRAM_TOKEN }}
+    ORDO_TELEGRAM_CHAT: ${{ secrets.ORDO_TELEGRAM_CHAT }}
+  run: python3 -m ordo bot --once
+```
+
+`ORDO_TELEGRAM_CHAT` здесь ещё и allowlist: сообщения из других чатов
+игнорируются. Обработанное смещение лежит в `ordo.db` (`meta`), поэтому один и
+тот же апдейт не обрабатывается дважды; состояние коммитится в ветку `state`
+тем же шаблоном, что и в `remind.yml`.
+
+**Как проверить, не дожидаясь cron:** локально
+
+```bash
+export ORDO_TELEGRAM_TOKEN="..."
+export ORDO_TELEGRAM_CHAT="..."
+ordo bot --test      # придёт проверочное сообщение -> токен и чат верные
+ordo bot --follow    # живой диалог: пиши /start, /list, /add ...
+```
 
 ### Пример `remind.yml`
 
@@ -284,3 +314,5 @@ GitHub Pages отдаёт статику. Можно генерировать `i
 - [ ] Прогнать workflow вручную (`workflow_dispatch`) и проверить, что пришло сообщение.
 - [ ] Добавить `dashboard.yml` и включить GitHub Pages.
 - [ ] (Опционально) `issueops.yml` для управления из issue.
+- [ ] (Опционально) `bot.yml`, чтобы команды в Telegram работали без сервера;
+      сначала проверить связь локально: `ordo bot --test`, затем `ordo bot --follow`.

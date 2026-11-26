@@ -65,6 +65,19 @@ class Store:
         self._log(kind, **kwargs)
         self.conn.commit()
 
+    # ------------------------------------------------------------------- meta
+    def get_meta(self, key, default=None):
+        """Read a small key/value pair (schema version, bot offset, ...)."""
+        row = self.conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row is not None else default
+
+    def set_meta(self, key, value):
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, str(value))
+        )
+        self.conn.commit()
+        return str(value)
+
     # --------------------------------------------------------------- projects
     def add_project(self, name, description=""):
         name = (name or "").strip()

@@ -37,6 +37,14 @@ jobs:
           git fetch origin state || true
           git checkout origin/state -- ordo.db 2>/dev/null || true
 
+      - name: Ensure the database exists
+        # A title that is not a valid command used to make argparse exit before
+        # the database was opened, so the "Save state" step then failed with
+        # `pathspec 'ordo.db' did not match any files`.
+        env:
+          ORDO_DB: ordo.db
+        run: python3 -m ordo init >/dev/null
+
       - name: Run command from the issue title
         env:
           ORDO_DB: ordo.db

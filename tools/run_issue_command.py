@@ -10,14 +10,14 @@ The issue title is used as the command, e.g.:
     add "Починить парсер" -d 3d -P 1
     /done 4 -c "готово"
     list --overdue
+
+A title that is not a command (a normal bug report) no longer crashes the run:
+it prints a short help so the workflow can still save the state branch.
 """
 
 from __future__ import annotations
 
-import contextlib
-import io
 import os
-import shlex
 import sys
 from pathlib import Path
 
@@ -25,34 +25,24 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ordo.cli import main as ordo_main  # noqa: E402
+from ordo.command import handle_text, split_command  # noqa: E402
 
 
 def parse_command(raw):
-    text = (raw or "").strip()
-    if text.startswith("/"):
-        text = text[1:].strip()
-    if text.lower().startswith("ordo "):
-        text = text[5:].strip()
-    if not text:
-        raise ValueError("empty command")
-    return shlex.split(text)
+    """Split a command string into argv (kept for backwards compatibility)."""
+    return split_command(raw)
 
 
 def main(argv=None):
     raw = os.environ.get("ORDO_ISSUE_COMMAND", "")
-    try:
-        parsed = parse_command(raw)
-    except ValueError as exc:
-        print("ordo: %s (задайте команду в заголовке issue)" % exc)
+    if not raw.strip():
+        print('ordo: задайте команду в заголовке issue, например: add "Задача" -d 3d')
         return 2
 
-    buffer = io.StringIO()
-    with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
-        code = ordo_main(parsed)
-    print(buffer.getvalue().rstrip())
+    code, output = handle_text(raw)
+    print(output)
     print("\n(exit code: %s)" % code)
-    return code
+    return 0 if code == 0 else code
 
 
 if __name__ == "__main__":
